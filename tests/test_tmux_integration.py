@@ -13,9 +13,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-@unittest.skipUnless(shutil.which("tmux"), "tmux is not installed")
 class TmuxIntegrationTests(unittest.TestCase):
     def test_spaces_edits_exit_status_and_pane_cleanup(self):
+        if not shutil.which("tmux"):
+            if os.environ.get("CI"):
+                self.fail("tmux is required in CI")
+            self.skipTest("tmux is not installed")
         with tempfile.TemporaryDirectory(prefix="codex split test ") as tempdir:
             temp = Path(tempdir)
             socket = "codex-split-test-" + str(os.getpid())
@@ -30,6 +33,8 @@ class TmuxIntegrationTests(unittest.TestCase):
             start = subprocess.run([str(wrapper), "new-session", "-d", "-s", "smoke", "-x", "100", "-y", "30"], env=env, capture_output=True, text=True)
             if start.returncode:
                 file_shutil.rmtree(socket_dir, ignore_errors=True)
+                if os.environ.get("CI"):
+                    self.fail(f"tmux server sockets unavailable: {start.stderr.strip()}")
                 self.skipTest(f"tmux server sockets unavailable: {start.stderr.strip()}")
             try:
                 pane = subprocess.check_output([str(wrapper), "display-message", "-p", "-t", "smoke:0", "#{pane_id}"], env=env, text=True).strip()
