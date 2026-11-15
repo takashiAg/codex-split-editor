@@ -85,6 +85,7 @@ class BackendTests(unittest.TestCase):
             return helper.subprocess.CompletedProcess(command, 0)
         run.side_effect = fake_run
         with patch.dict(os.environ, {"PATH": os.environ["PATH"]}, clear=True), \
+             patch.object(launcher.shutil, "which", return_value="/usr/bin/fake"), \
              patch.object(launcher.sys, "argv", ["codex-split", "--backend", "zellij", "--editor", "/bin/echo", "--codex-bin", "/bin/echo"]):
             self.assertEqual(launcher.main(), 0)
         command = run.call_args.args[0]
