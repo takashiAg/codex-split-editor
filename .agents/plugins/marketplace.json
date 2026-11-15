@@ -1,0 +1,17 @@
+{
+  "name": "codex-split-editor",
+  "plugins": [
+    {
+      "name": "codex-split-editor",
+      "source": {
+        "source": "local",
+        "path": "./"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

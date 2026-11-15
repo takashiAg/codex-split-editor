@@ -1,0 +1,24 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "codex-split-editor",
+  "version": "0.2.0",
+  "description": "Open Codex's Ctrl+G prompt editor in a tmux or Zellij split pane.",
+  "author": {
+    "name": "takashiAg"
+  },
+  "repository": "https://github.com/takashiAg/codex-split-editor",
+  "license": "MIT",
+  "extensions": {
+    "com.openai": {
+      "onboardingSkill": "./skills/manage-codex-split-editor/SKILL.md",
+      "interface": {
+        "displayName": "Codex Split Editor",
+        "shortDescription": "Edit Codex prompts in a split pane.",
+        "longDescription": "Configure tmux or Zellij so Ctrl+G opens a normal editor beside Codex and returns the saved draft to the composer.",
+        "developerName": "takashiAg",
+        "category": "Productivity",
+        "capabilities": ["Read", "Write"]
+      }
+    }
+  }
+}

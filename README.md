@@ -1,67 +1,60 @@
-# codex-split-editor
+# Codex Split Editor
 
 [日本語](README.ja.md)
 
-Run Codex CLI in tmux or Zellij and open its external-editor request in a normal terminal editor in a neighboring pane. tmux is the default. Codex waits while the editor is open; when you save and quit, focus returns to Codex. The editor's exit code is returned to Codex.
+Codex plugin for editing a prompt in a neighboring terminal pane. Install the plugin, run setup once, then use ordinary `codex` and `codex resume` commands. Press **Ctrl+G** in the composer to open the configured editor; save and close to return the draft to Codex, then review and send it yourself.
 
-Supported on macOS and Linux. WSL has not been tested.
-
-## Requirements
-
-- Python 3.10 or newer
-- Codex CLI
-- tmux (default backend) or Zellij (optional backend)
-- An editor such as `nano`, `vim`, or `nvim`
-
-Zellij users need version 0.46 or newer for the pane lifecycle commands used here. On macOS, install the backend you want with `brew install tmux` or `brew install zellij`.
-
-Install the multiplexer yourself. This tool does not install software or change shell startup files.
+Supported on macOS. Codex's external-editor flow suspends its current interaction while the editor is open. This plugin shows a frozen, read-only copy of the caller pane's available terminal scrollback in a pager beside the editor; it is not the full saved conversation. It does not send prompts.
 
 ## Install
 
-```sh
-git clone https://github.com/takashiAg/codex-split-editor.git
-cd codex-split-editor
-mkdir -p ~/.local/bin
-ln -s "$PWD/codex-split" "$HOME/.local/bin/codex-split"
-ln -s "$PWD/codex-split-editor" "$HOME/.local/bin/codex-split-editor"
+In Codex, add this repository as a local marketplace and install the plugin:
+
+```text
+codex plugin marketplace add takashiAg/codex-split-editor
+codex plugin add codex-split-editor@codex-split-editor
 ```
 
-Ensure `~/.local/bin` is on `PATH`, then start Codex through the launcher:
+Use the plugin's setup skill when Codex offers onboarding, or ask Codex to set up Codex Split Editor. Setup installs a small shell integration so interactive `codex` and `codex resume` launch in the selected multiplexer. Open one fresh terminal after setup so the new shell function is loaded.
 
-For fish, add the directory to the current shell with `fish_add_path ~/.local/bin`.
+Setup defaults to tmux, a left/right split, and `nano`. Choose Zellij, a top/bottom split, or another editor during setup. It leaves `EDITOR`, global `VISUAL`, unrelated shell files, and existing multiplexer sessions unchanged. It does not install packages unless you request Homebrew dependency installation.
+
+To run setup directly from a checkout, Python 3.10+ is sufficient; pnpm is optional:
 
 ```sh
-codex-split
-codex-split --editor vim -- --model your-model
-codex-split --backend zellij --editor 'nvim -u NONE'
-codex-split --layout vertical -- resume
+python3 scripts/setup.py setup --shell fish --backend tmux --layout horizontal --editor nano
+# or
+pnpm run setup -- --shell fish --backend zellij --editor vim
 ```
 
-`--layout horizontal` places the editor left/right; `--layout vertical` places it top/bottom. `--editor` accepts a command with arguments. The default editor is `nano`; `CODEX_SPLIT_EDITOR`, `CODEX_SPLIT_BACKEND`, and `CODEX_SPLIT_LAYOUT` can set defaults.
+Supported shells are fish, zsh, and bash. Select the shell that launches Codex. If a required tool is missing, install it yourself or explicitly request `--install-deps` to install only the selected missing tools with Homebrew.
 
-The launcher reuses an existing session when already inside the selected multiplexer. Outside one, it creates a session and starts Codex there. New Zellij sessions use a temporary, session-only config that hides first-run tips and frees Ctrl+G for Codex; Ctrl+Alt+G locks or unlocks the Zellij UI. Existing Zellij sessions keep their current keybindings, so rebind Ctrl+G there if it currently toggles the locked mode. If Codex is already running outside tmux/Zellij, invoke the launcher in a new terminal session to use split editing.
+## Use
 
-In Codex, press **Ctrl+G** to open the editor. In nano, save with **Ctrl+O**, press **Enter**, then exit with **Ctrl+X**. In Vim, save and exit with `:wq`.
+In Codex, press **Ctrl+G**. The snapshot pager supports PgUp/PgDn and arrow keys; press `q` to close it. The editor is in the neighboring pane. In nano, save with **Ctrl+O**, press **Enter**, then exit with **Ctrl+X**. In Vim, save and exit with `:wq`. Codex returns the edited text to the composer for you to review and send.
+
+tmux is the default backend. Zellij 0.46.0 or newer is required. The setup skill accepts options such as `--backend zellij`, `--layout vertical` (top/bottom), and `--editor 'nvim -u NONE'`. A setup update can change those preferences while preserving the managed integration.
 
 ## Uninstall
 
-Remove the two symlinks and, if desired, the cloned directory:
+Ask the setup skill to uninstall, or run the installed management script:
 
 ```sh
-rm "$HOME/.local/bin/codex-split" "$HOME/.local/bin/codex-split-editor"
-rm -rf /path/to/codex-split-editor
+python3 "${XDG_DATA_HOME:-$HOME/.local/share}/codex-split-editor/setup.py" uninstall
+```
+
+The script removes only the exact integration and runtime files it owns. It preserves other files and stops if an owned file was edited. Remove the plugin separately if desired:
+
+```sh
+codex plugin remove codex-split-editor@codex-split-editor
+codex plugin marketplace remove codex-split-editor
 ```
 
 ## Development
 
-Run tests with `python3 -m unittest discover -s tests`. The tmux integration test uses a private temporary server. Run `tests/run_zellij_integration.sh` to exercise Zellij 0.46.0 in a bounded background session; it verifies the editor behavior and fails if the test is skipped.
+Run tests with `python3 -m unittest discover -s tests`. CI covers Python 3.10 and 3.13 on Ubuntu, Python 3.13 on macOS, and a pinned Zellij integration run. Pull requests require the aggregate **CI** check; review approval is optional.
 
-## CI and releases
-
-Pull requests and pushes to `main` run the required `CI` check. It covers Python 3.10 and 3.13 on Ubuntu, Python 3.13 on macOS, and a pinned Zellij 0.46.0 integration run. Main is protected: changes merge through pull requests after CI passes. Reviews are optional; the repository does not require an approval count.
-
-To prepare a release, run the **Release** workflow from `main` with a `vMAJOR.MINOR.PATCH` version. The default dry run validates the request, reruns CI, builds a distributable archive and SHA-256 file, and uploads them as a workflow artifact. Turn off dry run only when ready to create the version tag and GitHub release. Existing tags and releases are never overwritten.
+To prepare a release, run the **Release** workflow from `main` with a `vMAJOR.MINOR.PATCH` version. Dry run is enabled by default; it validates, tests, packages, and uploads an artifact without creating a tag or release.
 
 ## License
 

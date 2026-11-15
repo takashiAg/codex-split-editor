@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Open Codex's requested file in a dedicated tmux or zellij pane."""
+"""Codex VISUAL helper: show a frozen pane copy beside the requested editor."""
 
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import shlex
@@ -13,177 +12,241 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 import uuid
 from pathlib import Path
 
 
-class EditorError(RuntimeError):
+class HelperError(RuntimeError):
     pass
 
 
-def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Open files in a normal editor in a tmux/zellij split pane."
-    )
-    parser.add_argument("--backend", choices=("tmux", "zellij"),
-                        default=os.environ.get("CODEX_SPLIT_BACKEND", "tmux"))
-    parser.add_argument("--layout", choices=("horizontal", "vertical"),
-                        default=os.environ.get("CODEX_SPLIT_LAYOUT", "horizontal"),
-                        help="horizontal=left/right; vertical=top/bottom")
-    parser.add_argument("--editor", help="editor command, e.g. 'vim' or 'nano'")
-    parser.add_argument("files", nargs="*", help="file paths supplied by Codex")
-    args = parser.parse_args(argv)
-    if args.backend not in ("tmux", "zellij") or args.layout not in ("horizontal", "vertical"):
-        parser.error("invalid backend or layout value")
-    if not args.files:
-        parser.error("Codex must pass a file path")
-    return args
-
-
-def editor_argv(editor: str | None, files: list[str]) -> list[str]:
-    command = editor or os.environ.get("CODEX_SPLIT_EDITOR") or os.environ.get("EDITOR") or "nano"
+def command(argv: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
     try:
-        argv = shlex.split(command)
-    except ValueError as exc:
-        raise EditorError(f"Invalid editor command: {exc}") from exc
-    if not argv:
-        raise EditorError("Editor command is empty")
-    executable = shutil.which(argv[0])
-    if executable is None:
-        raise EditorError(f"Editor not found: {argv[0]} (set --editor or CODEX_SPLIT_EDITOR)")
-    argv[0] = executable
-    return argv + files
-
-
-def run(cmd: list[str], *, check: bool = True, interactive: bool = False) -> subprocess.CompletedProcess[str]:
-    try:
-        result = subprocess.run(cmd, text=True, capture_output=not interactive, check=False)
+        result = subprocess.run(argv, text=True, capture_output=True, check=False)
     except FileNotFoundError as exc:
-        raise EditorError(f"Required command not found: {cmd[0]}") from exc
+        raise HelperError(f"Required command not found: {argv[0]}") from exc
     if check and result.returncode:
         detail = result.stderr.strip() or result.stdout.strip()
-        raise EditorError(f"Command failed ({result.returncode}): {shlex.join(cmd)}" + (f"\n{detail}" if detail else ""))
+        raise HelperError(detail or f"Command failed ({result.returncode}): {shlex.join(argv)}")
     return result
 
 
-def check_dependency(binary: str) -> None:
-    if not shutil.which(binary):
-        raise EditorError(f"{binary} is required for the {binary} backend. Install it and retry.")
+def safe_text(snapshot: str) -> str:
+    # Capture APIs return cells rather than terminal escape streams, but strip
+    # control bytes anyway before opening the snapshot in a pager.
+    return "".join(ch for ch in snapshot if ch in "\n\t" or unicodedata.category(ch) != "Cc")
 
 
-def wait_for_status(marker: str, *, pane_id: str | None = None) -> int:
-    """Wait for the worker to publish its exit status, including nonzero exits."""
+def tmux_snapshot(caller: str) -> str:
+    result = command(["tmux", "capture-pane", "-p", "-S", "-", "-t", caller])
+    return result.stdout
+
+
+def zellij_snapshot(caller: str) -> str:
+    result = command(["zellij", "action", "dump-screen", "--full", "--pane-id", caller])
+    return result.stdout
+
+
+def write_snapshot(path: Path, text: str) -> None:
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S %Z")
+    header = (
+        f"Codex pane snapshot captured {stamp}. This is a frozen copy of the terminal's visible scrollback.\n"
+        "Page with PgUp/PgDn or the arrow keys; press q to close. Switch panes to return to the editor.\n"
+        "The full saved Codex conversation may contain more history than this terminal snapshot.\n\n"
+    )
+    path.write_text(header + safe_text(text), encoding="utf-8")
+
+
+def editor_command(editor: str, filename: str) -> list[str]:
+    try:
+        argv = shlex.split(editor)
+    except ValueError as exc:
+        raise HelperError(f"Invalid editor command: {exc}") from exc
+    if not argv:
+        raise HelperError("Editor command is empty")
+    found = shutil.which(argv[0])
+    if not found:
+        raise HelperError(f"Editor not found: {argv[0]}")
+    argv[0] = found
+    return [*argv, filename]
+
+
+def status_code(path: Path) -> int | None:
+    try:
+        return int(path.read_text(encoding="ascii"))
+    except (OSError, ValueError):
+        return None
+
+
+def tmux_pane_alive(pane_id: str) -> bool:
+    result = command(["tmux", "display-message", "-p", "-t", pane_id, "#{pane_id}"], check=False)
+    return result.returncode == 0 and result.stdout.strip() == pane_id
+
+
+def zellij_pane_alive(pane_id: str) -> bool:
+    result = command(["zellij", "action", "list-panes", "--json"], check=False)
+    if result.returncode:
+        return False
+    try:
+        normalized = pane_id.removeprefix("terminal_").removeprefix("plugin_")
+        return any(str(p.get("id")) == normalized and not p.get("is_plugin") for p in json.loads(result.stdout))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return False
+
+
+def wait_for_editor(
+    marker: Path,
+    pane_id: str,
+    pane_alive,
+    pager: subprocess.Popen[str],
+) -> tuple[int, bool]:
+    """Watch the worker and close its pager as soon as editing ends."""
     while True:
-        try:
-            return int(Path(marker).read_text())
-        except (OSError, ValueError):
-            if pane_id:
-                pane = run(["tmux", "display-message", "-p", "-t", pane_id, "#{pane_id}"], check=False)
-                if pane.returncode or pane.stdout.strip() != pane_id:
-                    try:
-                        return int(Path(marker).read_text())
-                    except (OSError, ValueError):
-                        return 1
-            time.sleep(0.1)
+        code = status_code(marker)
+        if code is not None:
+            if pager.poll() is None:
+                pager.terminate()
+            return code, True
+        if not pane_alive(pane_id):
+            # The worker writes its marker immediately before its pane exits.
+            # Recheck after observing pane death to cover that close/write race.
+            code = status_code(marker)
+            if code is not None:
+                if pager.poll() is None:
+                    pager.terminate()
+                return code, True
+            if pager.poll() is None:
+                pager.terminate()
+            return 1, False
+        time.sleep(0.1)
 
 
-def tmux_inside(command: list[str], layout: str) -> int:
+def worker_script(argv: list[str], marker: Path) -> str:
+    return (
+        f"{shlex.join(argv)}; rc=$?; "
+        f"printf '%s' \"$rc\" > {shlex.quote(str(marker))}; exit 0"
+    )
+
+
+def start_pager(path: Path) -> subprocess.Popen[str]:
+    try:
+        env = os.environ.copy()
+        env["LESSSECURE"] = "1"
+        env.pop("LESSOPEN", None)
+        env.pop("LESSCLOSE", None)
+        return subprocess.Popen(["less", "-M", "-R", str(path)], env=env)
+    except FileNotFoundError as exc:
+        raise HelperError("less is required to browse the read-only transcript snapshot") from exc
+
+
+def tmux_edit(filename: str, editor: str, layout: str) -> int:
     caller = os.environ.get("TMUX_PANE")
     if not caller:
-        raise EditorError("tmux did not provide TMUX_PANE; invoke codex-split inside tmux")
-    marker_dir = tempfile.mkdtemp(prefix="codex-split-editor-")
-    marker = str(Path(marker_dir) / "status")
-    shell = f"{shlex.join(command)}; rc=$?; printf '%s' \"$rc\" > {shlex.quote(marker)}; exit 0"
-    direction = "-h" if layout == "horizontal" else "-v"
+        raise HelperError("Codex must be running inside tmux for a split editor")
+    tmp = Path(tempfile.mkdtemp(prefix="codex-split-editor-"))
+    os.chmod(tmp, 0o700)
+    marker = tmp / "status"
+    snapshot = tmp / "snapshot.txt"
+    pane_id: str | None = None
+    pager: subprocess.Popen[str] | None = None
     try:
-        created = run(["tmux", "split-window", direction, "-P", "-F", "#{pane_id}",
-                       "-t", caller, "--", "sh", "-c", shell])
+        write_snapshot(snapshot, tmux_snapshot(caller))
+        direction = "-h" if layout == "horizontal" else "-v"
+        argv = editor_command(editor, filename)
+        created = command([
+            "tmux", "split-window", direction, "-P", "-F", "#{pane_id}",
+            "-t", caller, "-c", os.getcwd(), "--", "sh", "-c", worker_script(argv, marker),
+        ])
         pane_id = created.stdout.strip()
         if not pane_id:
-            raise EditorError("tmux created a pane but did not return its pane id")
-        try:
-            return wait_for_status(marker, pane_id=pane_id)
-        finally:
-            run(["tmux", "kill-pane", "-t", pane_id], check=False)
+            raise HelperError("tmux did not return the new editor pane id")
+        pager = start_pager(snapshot)
+        code, completed = wait_for_editor(marker, pane_id, tmux_pane_alive, pager)
+        if not completed:
+            raise HelperError("The editor pane closed before it returned an exit status")
+        return code
     finally:
-        run(["tmux", "select-pane", "-t", caller], check=False)
-        shutil.rmtree(marker_dir, ignore_errors=True)
+        if pager is not None and pager.poll() is None:
+            pager.terminate()
+            try:
+                pager.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                pager.kill()
+                pager.wait()
+        if pane_id:
+            command(["tmux", "kill-pane", "-t", pane_id], check=False)
+        command(["tmux", "select-pane", "-t", caller], check=False)
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
-def open_tmux(command: list[str], layout: str) -> int:
-    check_dependency("tmux")
-    if not os.environ.get("TMUX"):
-        raise EditorError("No tmux session found. Start Codex with the codex-split launcher.")
-    return tmux_inside(command, layout)
-
-
-def open_zellij(command: list[str], layout: str) -> int:
-    check_dependency("zellij")
-    direction = "right" if layout == "horizontal" else "down"
-    if os.environ.get("ZELLIJ"):
-        marker_dir = tempfile.mkdtemp(prefix="codex-split-editor-")
-        marker = str(Path(marker_dir) / "status")
-        shell = f"{shlex.join(command)}; rc=$?; printf '%s' \"$rc\" > {shlex.quote(marker)}; exit 0"
-        caller = os.environ.get("ZELLIJ_PANE_ID")
-        try:
-            panes = run(["zellij", "action", "list-panes", "--json"], check=False) if not caller else None
-            if panes and panes.returncode == 0:
-                try:
-                    for pane in json.loads(panes.stdout):
-                        if pane.get("is_focused") and not pane.get("is_plugin"):
-                            caller = str(pane.get("id"))
-                            break
-                except (TypeError, ValueError):
-                    caller = None
-            created = run(["zellij", "action", "new-pane", "--direction", direction,
-                           "--near-current-pane", "--close-on-exit", "--",
-                           "sh", "-c", shell], check=False)
-            pane_id = created.stdout.strip()
-            if created.returncode or not pane_id:
-                detail = created.stderr.strip()
-                if "floating panes are visible" in detail.lower():
-                    detail = "Close or hide the floating pane, then try Ctrl+G again."
-                if detail:
-                    print(f"codex-split-editor: could not create Zellij pane: {detail}", file=sys.stderr)
-                return 1
-            while True:
-                try:
-                    return int(Path(marker).read_text())
-                except (OSError, ValueError):
-                    current = run(["zellij", "action", "list-panes", "--json"], check=False)
-                    if current.returncode:
-                        return 1
-                    try:
-                        numeric_id = pane_id.removeprefix("terminal_").removeprefix("plugin_")
-                        if not any(str(pane.get("id")) == numeric_id and not pane.get("is_plugin")
-                                   for pane in json.loads(current.stdout)):
-                            try:
-                                return int(Path(marker).read_text())
-                            except (OSError, ValueError):
-                                return 1
-                    except (TypeError, ValueError):
-                        return 1
-                    time.sleep(0.1)
-        finally:
-            if "pane_id" in locals():
-                run(["zellij", "action", "close-pane", "--pane-id", pane_id], check=False)
-            if caller:
-                run(["zellij", "action", "focus-pane-id", caller], check=False)
-            shutil.rmtree(marker_dir, ignore_errors=True)
-    raise EditorError("No Zellij session found. Start Codex with the codex-split launcher.")
+def zellij_edit(filename: str, editor: str, layout: str) -> int:
+    caller = os.environ.get("ZELLIJ_PANE_ID")
+    if not caller:
+        raise HelperError("Codex must be running inside Zellij for a split editor")
+    tmp = Path(tempfile.mkdtemp(prefix="codex-split-editor-"))
+    os.chmod(tmp, 0o700)
+    marker = tmp / "status"
+    snapshot = tmp / "snapshot.txt"
+    pane_id: str | None = None
+    pager: subprocess.Popen[str] | None = None
+    try:
+        write_snapshot(snapshot, zellij_snapshot(caller))
+        direction = "right" if layout == "horizontal" else "down"
+        argv = editor_command(editor, filename)
+        created = command([
+            "zellij", "action", "new-pane", "--direction", direction,
+            "--cwd", os.getcwd(), "--near-current-pane", "--close-on-exit", "--",
+            "sh", "-c", worker_script(argv, marker),
+        ])
+        pane_id = created.stdout.strip()
+        if created.returncode or not pane_id:
+            detail = created.stderr.strip() or created.stdout.strip()
+            if "floating panes are visible" in detail.lower():
+                detail = "Close or hide the floating pane, then try Ctrl+G again."
+            raise HelperError(f"Could not create Zellij editor pane: {detail or created.returncode}")
+        pager = start_pager(snapshot)
+        code, completed = wait_for_editor(marker, pane_id, zellij_pane_alive, pager)
+        if not completed:
+            raise HelperError("The editor pane closed before it returned an exit status")
+        return code
+    finally:
+        if pager is not None and pager.poll() is None:
+            pager.terminate()
+            try:
+                pager.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                pager.kill()
+                pager.wait()
+        if pane_id:
+            command(["zellij", "action", "close-pane", "--pane-id", pane_id], check=False)
+        command(["zellij", "action", "focus-pane-id", caller], check=False)
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def main(argv: list[str] | None = None) -> int:
-    def interrupt(_signum: int, _frame: object) -> None:
+    def interrupted(_signum: int, _frame: object) -> None:
         raise KeyboardInterrupt
 
-    for signum in (signal.SIGTERM, signal.SIGHUP):
-        signal.signal(signum, interrupt)
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, interrupted)
+    files = sys.argv[1:] if argv is None else argv
+    if not files:
+        print("codex-split-editor: Codex did not supply an editor file", file=sys.stderr)
+        return 2
+    backend = os.environ.get("CODEX_SPLIT_BACKEND", "tmux")
+    layout = os.environ.get("CODEX_SPLIT_LAYOUT", "horizontal")
+    editor = os.environ.get("CODEX_SPLIT_EDITOR", "nano")
+    if backend not in ("tmux", "zellij") or layout not in ("horizontal", "vertical"):
+        print("codex-split-editor: invalid backend or layout setup", file=sys.stderr)
+        return 2
+    if not shutil.which("less"):
+        print("codex-split-editor: less is required to browse the transcript snapshot", file=sys.stderr)
+        return 2
     try:
-        args = parse_args(sys.argv[1:] if argv is None else argv)
-        command = editor_argv(args.editor, args.files)
-        return open_tmux(command, args.layout) if args.backend == "tmux" else open_zellij(command, args.layout)
-    except EditorError as exc:
+        code = tmux_edit(files[-1], editor, layout) if backend == "tmux" else zellij_edit(files[-1], editor, layout)
+        return code
+    except HelperError as exc:
         print(f"codex-split-editor: {exc}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:
