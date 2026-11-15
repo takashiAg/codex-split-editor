@@ -66,4 +66,3 @@ To prepare a release, run the **Release** workflow from `main` with a `vMAJOR.MI
 ## License
 
 MIT. See [LICENSE](LICENSE).
-
