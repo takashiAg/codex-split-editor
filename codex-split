@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+"""Start Codex in tmux or Zellij with codex-split-editor as VISUAL."""
+
+from __future__ import annotations
+
+import argparse
+import os
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+import uuid
+from pathlib import Path
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Run Codex in a multiplexer with a split-pane external editor.")
+    parser.add_argument("--backend", choices=("tmux", "zellij"), default=os.environ.get("CODEX_SPLIT_BACKEND", "tmux"))
+    parser.add_argument("--editor", default=os.environ.get("CODEX_SPLIT_EDITOR", "nano"), help="editor command, e.g. vim or nano")
+    parser.add_argument("--layout", choices=("horizontal", "vertical"), default=os.environ.get("CODEX_SPLIT_LAYOUT", "horizontal"))
+    parser.add_argument("--codex-bin", default=os.environ.get("CODEX_BIN", "codex"), help=argparse.SUPPRESS)
+    parser.add_argument("command", nargs=argparse.REMAINDER, help="Codex arguments after --")
+    args = parser.parse_args()
+    if args.backend not in ("tmux", "zellij") or args.layout not in ("horizontal", "vertical"):
+        parser.error("invalid backend or layout value")
+    command = [args.codex_bin, *args.command]
+    if command[1:2] == ["--"]:
+        command = [command[0], *command[2:]]
+    executable = shutil.which(command[0])
+    if executable is None:
+        print(f"codex-split: command not found: {command[0]}", file=sys.stderr)
+        return 127
+    command[0] = executable
+    try:
+        editor_args = shlex.split(args.editor)
+    except ValueError as exc:
+        print(f"codex-split: invalid --editor value: {exc}", file=sys.stderr)
+        return 2
+    if not editor_args or shutil.which(editor_args[0]) is None:
+        print(f"codex-split: editor not found: {editor_args[0] if editor_args else args.editor}", file=sys.stderr)
+        return 2
+    helper = str(Path(__file__).resolve().with_name("codex-split-editor"))
+    env = os.environ.copy()
+    env["VISUAL"] = shlex.join([helper])
+    env["CODEX_SPLIT_EDITOR"] = args.editor
+    env["CODEX_SPLIT_BACKEND"] = args.backend
+    env["CODEX_SPLIT_LAYOUT"] = args.layout
+    if args.backend == "tmux" and env.get("TMUX"):
+        return subprocess.run(command, env=env, check=False).returncode
+    if args.backend == "zellij" and env.get("ZELLIJ"):
+        return subprocess.run(command, env=env, check=False).returncode
+    binary = args.backend
+    if not shutil.which(binary):
+        print(f"codex-split: {binary} is required. Install it and retry.", file=sys.stderr)
+        return 2
+    session = "codex-split-" + uuid.uuid4().hex[:8]
+    wrapped = ["env", f"PATH={env.get('PATH', '')}", f"VISUAL={env['VISUAL']}", f"CODEX_SPLIT_EDITOR={env['CODEX_SPLIT_EDITOR']}",
+               f"CODEX_SPLIT_BACKEND={args.backend}", f"CODEX_SPLIT_LAYOUT={args.layout}", *command]
+    if args.backend == "tmux":
+        argv = ["tmux", "new-session", "-A", "-s", session, "--", *wrapped]
+    else:
+        # New sessions get a private config so Ctrl+G reaches Codex (Zellij's
+        # default binding locks the UI) and first-run floating tips don't block
+        # the first split. Existing sessions keep their own configuration.
+        with tempfile.TemporaryDirectory(prefix="codex-split-zellij-") as config_dir:
+            config = Path(config_dir) / "config.kdl"
+            config.write_text(
+                'show_startup_tips false\n'
+                'show_release_notes false\n'
+                'default_mode "locked"\n'
+                'keybinds {\n'
+                '    unbind "Ctrl g"\n'
+                '    locked {\n'
+                '        bind "Ctrl Alt g" { SwitchToMode "Normal"; }\n'
+                '    }\n'
+                '    shared_except "locked" {\n'
+                '        bind "Ctrl Alt g" { SwitchToMode "Locked"; }\n'
+                '    }\n'
+                '}\n'
+            )
+            argv = ["zellij", "--config", str(config), "attach", "--create", session,
+                    "--close-on-exit", "--", *wrapped]
+            try:
+                return subprocess.run(argv, check=False).returncode
+            except KeyboardInterrupt:
+                return 130
+    try:
+        return subprocess.run(argv, check=False).returncode
+    except KeyboardInterrupt:
+        return 130
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
