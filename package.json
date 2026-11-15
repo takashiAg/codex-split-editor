@@ -1,0 +1,8 @@
+{
+  "name": "codex-split-editor",
+  "private": true,
+  "scripts": {
+    "setup": "python3 scripts/setup.py setup --source .",
+    "uninstall": "python3 scripts/setup.py uninstall"
+  }
+}

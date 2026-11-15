@@ -20,6 +20,12 @@ install -m 0755 "$repo_root/codex-split-editor" "$package_root/codex-split-edito
 install -m 0644 "$repo_root/README.md" "$package_root/README.md"
 install -m 0644 "$repo_root/README.ja.md" "$package_root/README.ja.md"
 install -m 0644 "$repo_root/LICENSE" "$package_root/LICENSE"
+install -m 0644 "$repo_root/plugin.json" "$package_root/plugin.json"
+install -m 0644 "$repo_root/package.json" "$package_root/package.json"
+mkdir -p "$package_root/scripts" "$package_root/.agents/plugins" "$package_root/skills/manage-codex-split-editor"
+install -m 0755 "$repo_root/scripts/setup.py" "$package_root/scripts/setup.py"
+install -m 0644 "$repo_root/.agents/plugins/marketplace.json" "$package_root/.agents/plugins/marketplace.json"
+install -m 0644 "$repo_root/skills/manage-codex-split-editor/SKILL.md" "$package_root/skills/manage-codex-split-editor/SKILL.md"
 
 mkdir -p "$distribution_dir"
 python3 - "$package_root" "$distribution_dir/$archive_name" <<'PY'
@@ -33,9 +39,15 @@ archive_name = os.path.basename(package_root)
 with open(archive_path, "wb") as raw:
     with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0, compresslevel=9) as compressed:
         with tarfile.open(fileobj=compressed, mode="w") as archive:
-            for filename in ("LICENSE", "README.ja.md", "README.md", "codex-split", "codex-split-editor"):
-                path = os.path.join(package_root, filename)
-                info = archive.gettarinfo(path, arcname=f"{archive_name}/{filename}")
+            paths = []
+            for directory, subdirectories, filenames in os.walk(package_root):
+                subdirectories.sort()
+                filenames.sort()
+                for filename in filenames:
+                    paths.append(os.path.join(directory, filename))
+            for path in sorted(paths):
+                relative = os.path.relpath(path, package_root)
+                info = archive.gettarinfo(path, arcname=f"{archive_name}/{relative}")
                 info.uid = info.gid = 0
                 info.uname = info.gname = ""
                 info.mtime = 1577836800

@@ -1,67 +1,60 @@
-# codex-split-editor（日本語）
+# Codex Split Editor（日本語）
 
 [English](README.md)
 
-Codex CLI を tmux または Zellij で起動し、外部エディターを隣のペインで開きます。既定のバックエンドは tmux です。Codex はエディターを閉じるまで待機し、保存して終了すると Codex にフォーカスが戻ります。エディターの終了コードも Codex に返します。
+Codex のプロンプトを隣のターミナルペインで編集する Codex プラグインです。プラグインをインストールして一度セットアップすれば、通常の `codex` と `codex resume` を使えます。入力欄で **Ctrl+G** を押すと設定したエディターが開きます。保存して閉じると編集した文章が Codex に戻り、内容を確認して自分で送信できます。
 
-## 必要なもの
-
-- Python 3.10 以上
-- Codex CLI
-- tmux（既定）または Zellij
-- `nano`、`vim`、`nvim` などのエディター
-
-macOS と Linux に対応しています。WSL では未検証です。
-
-Zellij を使う場合は、ペイン制御コマンドを備えた 0.46 以降が必要です。macOS では `brew install tmux` または `brew install zellij` で必要なバックエンドをインストールしてください。
-
-多重化ツールは利用者がインストールしてください。このツールはソフトウェアを自動インストールせず、シェルの起動設定も変更しません。
+macOS に対応しています。Codex の外部エディター処理中、現在のやり取りは一時停止します。編集画面の隣には呼び出し元ペインのスクロールバックを読み取り専用のスナップショットとして表示します。保存された会話全体ではありません。プロンプトを自動送信しません。
 
 ## インストール
 
-```sh
-git clone https://github.com/takashiAg/codex-split-editor.git
-cd codex-split-editor
-mkdir -p ~/.local/bin
-ln -s "$PWD/codex-split" "$HOME/.local/bin/codex-split"
-ln -s "$PWD/codex-split-editor" "$HOME/.local/bin/codex-split-editor"
+Codex でこのリポジトリをローカルマーケットプレイスとして追加し、プラグインをインストールします。
+
+```text
+codex plugin marketplace add takashiAg/codex-split-editor
+codex plugin add codex-split-editor@codex-split-editor
 ```
 
-`~/.local/bin` を `PATH` に追加したうえで、次のように起動します。fish では `fish_add_path ~/.local/bin` を実行します。
+Codex が案内するセットアップスキルを使うか、Codex に Codex Split Editor のセットアップを依頼してください。セットアップにより、小さなシェル関数が追加されます。対話的な `codex` と `codex resume` は選択した多重化ツール内で起動します。関数を読み込むため、一度新しいターミナルを開いてください。
 
-macOS では、利用するバックエンドを `brew install tmux` または `brew install zellij` でインストールします。Zellij は 0.46 以降が必要です。
+既定値は tmux、左右分割、`nano` です。セットアップ時に Zellij、上下分割、別のエディターを選べます。`EDITOR`、グローバルな `VISUAL`、無関係なシェル設定、既存の多重化セッションは変更しません。依存ソフトは依頼がない限りインストールしません。
+
+チェックアウトから直接セットアップする場合は Python 3.10 以上が必要です。pnpm は任意です。
 
 ```sh
-codex-split
-codex-split --editor vim
-codex-split --backend zellij --editor nvim
-codex-split --layout vertical -- resume
+python3 scripts/setup.py setup --shell fish --backend tmux --layout horizontal --editor nano
+# または
+pnpm run setup -- --shell fish --backend zellij --editor vim
 ```
 
-`horizontal` は左右、`vertical` は上下分割です。`--editor` には引数を含められます。既定のエディターは `nano` です。`CODEX_SPLIT_EDITOR`、`CODEX_SPLIT_BACKEND`、`CODEX_SPLIT_LAYOUT` でも既定値を指定できます。
+fish、zsh、bash に対応します。Codex を起動するシェルを選んでください。必要なコマンドがない場合は自分でインストールするか、`--install-deps` を明示して Homebrew から選択した不足ツールだけをインストールできます。
 
-選択した tmux または Zellij 内で起動すると、既存セッション内で Codex を実行します。外から起動すると新しいセッションを作成します。新しい Zellij セッションではセッション限定の一時設定を使い、初回案内を隠して Ctrl+G を Codex に渡します。Zellij のロック切替は Ctrl+Alt+G です。既存 Zellij セッションの設定は変更しないため、Ctrl+G がロック切替に使われている場合は、そのセッションでキーを変更してください。すでに多重化ツールの外で起動した Codex ではなく、このランチャーから Codex を起動してください。
+## 使い方
 
-Codex で **Ctrl+G** を押すとエディターが開きます。nano では **Ctrl+O**、**Enter**、**Ctrl+X** の順に押して保存・終了します。Vim では `:wq` で保存して終了します。
+Codex で **Ctrl+G** を押します。スナップショットは PgUp/PgDn と矢印キーで閲覧でき、`q` で閉じます。エディターは隣のペインにあります。nano では **Ctrl+O**、**Enter**、**Ctrl+X** の順に押して保存・終了します。Vim では `:wq` で保存して終了します。編集した文章が Codex の入力欄に戻るので、確認して送信してください。
 
-## 削除
+既定のバックエンドは tmux です。Zellij は 0.46.0 以降が必要です。セットアップスキルで `--backend zellij`、`--layout vertical`（上下分割）、`--editor 'nvim -u NONE'` などを指定できます。セットアップを再実行して設定を変更できます。
 
-2 つのシンボリックリンクを削除し、必要なら複製したリポジトリも削除します。
+## アンインストール
+
+セットアップスキルに削除を依頼するか、インストール済みの管理スクリプトを実行します。
 
 ```sh
-rm "$HOME/.local/bin/codex-split" "$HOME/.local/bin/codex-split-editor"
-rm -rf /path/to/codex-split-editor
+python3 "${XDG_DATA_HOME:-$HOME/.local/share}/codex-split-editor/setup.py" uninstall
+```
+
+自分が管理するシェル関数とランタイムファイルだけを削除します。他のファイルは保持し、管理対象が編集されている場合は停止します。必要ならプラグインも別途削除します。
+
+```sh
+codex plugin remove codex-split-editor@codex-split-editor
+codex plugin marketplace remove codex-split-editor
 ```
 
 ## 開発
 
-テストは `python3 -m unittest discover -s tests` で実行できます。tmux の統合テストは専用の一時サーバーを使います。`tests/run_zellij_integration.sh` は Zellij 0.46.0 のバックグラウンドセッションで統合テストを実行し、タイムアウトやスキップも失敗として扱います。
+テストは `python3 -m unittest discover -s tests` で実行できます。CI は Ubuntu で Python 3.10 と 3.13、macOS で Python 3.13、固定した Zellij で統合テストを実行します。プルリクエストでは集約チェック **CI** が必須です。レビュー承認は任意です。
 
-## CI とリリース
-
-プルリクエストと `main` への push で必須チェック `CI` が実行されます。Ubuntu では Python 3.10 と 3.13、macOS では Python 3.13 を検証し、固定バージョンの Zellij 0.46.0 でも統合テストを実行します。`main` は保護され、変更はプルリクエスト経由で CI 成功後に取り込まれます。レビューは任意で、承認数の必須設定はありません。
-
-リリースを準備するには、`main` から **Release** ワークフローを実行し、`vMAJOR.MINOR.PATCH` 形式のバージョンを指定します。既定のドライランでは入力を検証し、CI を再実行して、配布アーカイブと SHA-256 ファイルを作成し、ワークフロー成果物として保存します。タグと GitHub Release を作成する準備ができたときだけドライランを無効にしてください。既存のタグや Release は上書きしません。
+リリースを準備するには、`main` から **Release** ワークフローを実行し、`vMAJOR.MINOR.PATCH` 形式でバージョンを指定します。既定のドライランで検証・テスト・パッケージ化を行い、成果物をアップロードします。タグや Release は作成しません。
 
 ## ライセンス
 
