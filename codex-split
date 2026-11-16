@@ -95,9 +95,6 @@ def main(argv: list[str] | None = None) -> int:
     env["CODEX_SPLIT_BACKEND"] = config["backend"]
     env["CODEX_SPLIT_LAYOUT"] = config["layout"]
     env["PATH"] = os.environ.get("PATH", "")
-    if not any(arg in ("--alt-screen", "--no-alt-screen") for arg in args):
-        args.insert(0, "--no-alt-screen")
-
     if config["backend"] == "tmux" and env.get("TMUX"):
         return subprocess.run([codex, *args], env=env, check=False).returncode
     if config["backend"] == "zellij" and env.get("ZELLIJ"):
