@@ -89,7 +89,7 @@ class TmuxIntegrationTests(unittest.TestCase):
                 editor_stub.write_text("import pathlib,sys; p=pathlib.Path(sys.argv[1]); p.write_text(p.read_text()+' called')\n")
                 codex_stub = temp / "fake codex.py"
                 codex_stub.write_text(
-                    "import os,shlex,subprocess,sys; assert sys.argv[1:]==['--no-alt-screen','--flag','value with spaces']; "
+                    "import os,shlex,subprocess,sys; assert sys.argv[1:]==['--flag','value with spaces']; "
                     "assert os.environ['EDITOR']=='untouched-editor'; "
                     "subprocess.run(shlex.split(os.environ['VISUAL'])+[os.environ['EDIT_TARGET']],check=True)\n"
                 )
@@ -184,7 +184,7 @@ class TmuxIntegrationTests(unittest.TestCase):
                     self.assertTrue(values["TMUX_PANE"])
                     self.assertFalse(values["ZELLIJ"])
                     self.assertFalse(values["ZELLIJ_PANE_ID"])
-                    self.assertIn("--no-alt-screen", result["argv"])
+                    self.assertNotIn("--no-alt-screen", result["argv"])
                     self.assertEqual(external_target.read_text(), "before called")
                 finally:
                     try:
