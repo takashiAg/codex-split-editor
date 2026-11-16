@@ -136,6 +136,15 @@ def main(argv: list[str] | None = None) -> int:
                 ], check=False)
                 if created.returncode:
                     return created.returncode
+                # Keep terminal text selection with the terminal emulator.
+                # A user's global tmux `mouse on` setting otherwise applies to
+                # this fresh Codex session and intercepts double-click copying.
+                configured = subprocess.run(
+                    ["tmux", "set-option", "-t", session, "mouse", "off"], check=False
+                )
+                if configured.returncode:
+                    subprocess.run(["tmux", "kill-session", "-t", session], check=False)
+                    return configured.returncode
                 return subprocess.run(["tmux", "attach-session", "-t", session], check=False).returncode
             except KeyboardInterrupt:
                 return 130
