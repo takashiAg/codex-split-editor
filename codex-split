@@ -136,11 +136,6 @@ def main(argv: list[str] | None = None) -> int:
                 ], check=False)
                 if created.returncode:
                     return created.returncode
-                # Mouse support is scoped to this fresh, launcher-owned session.
-                configured = subprocess.run(["tmux", "set-option", "-t", session, "mouse", "on"], check=False)
-                if configured.returncode:
-                    subprocess.run(["tmux", "kill-session", "-t", session], check=False)
-                    return configured.returncode
                 return subprocess.run(["tmux", "attach-session", "-t", session], check=False).returncode
             except KeyboardInterrupt:
                 return 130
